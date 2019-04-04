@@ -78,7 +78,7 @@ def formatMemChange(what, from_size, to_size):
    difference = to_size - from_size
    return "%s: %d -> %d bytes (%+d bytes) %s" % (what, from_size, to_size, difference, tendency_symbol)
 
-def listUnion(l1, l2):
+def listIntersection(l1, l2):
    return sorted(list(set(l1) & set(l2)))
 
 symbol_type_class_method = 1
@@ -640,7 +640,7 @@ class BinaryPair(object):
       self.old_symbol_names = set(self.old_binary.symbols.keys())
       self.new_symbol_names = set(self.new_binary.symbols.keys())
 
-      self.common_symbol_names = listUnion(self.old_symbol_names, self.new_symbol_names)
+      self.common_symbol_names = listIntersection(self.old_symbol_names, self.new_symbol_names)
       self.symbols_only_in_old = sorted(self.old_symbol_names - self.new_symbol_names)
       self.symbols_only_in_new = sorted(self.new_symbol_names - self.old_symbol_names)
       
