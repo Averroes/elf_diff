@@ -64,6 +64,20 @@ def highlightNumberHTML(number):
       
    return "<span  class=\"%s number\">%+d</span>" % (css_class, number)
 
+def memDeltaHTML(old_size, new_size):
+   difference = new_size - old_size
+   return highlightNumberHTML(new_size - old_size)
+      
+def tendencySymbol(from_size, to_size):
+   if from_size > to_size:
+      return "*"
+   return ""
+            
+def formatMemChange(what, from_size, to_size):
+   tendency_symbol = tendencySymbol(from_size, to_size)
+   difference = to_size - from_size
+   return "%s: %d -> %d bytes (%+d bytes) %s" % (what, from_size, to_size, difference, tendency_symbol)
+
 def listUnion(l1, l2):
    return sorted(list(set(l1) & set(l2)))
 
@@ -93,6 +107,7 @@ class Settings(object):
       parser.add_argument('--html-file', default=None, dest='html_file', help='A html file to write output to')
       parser.add_argument('--pdf-file', default=None, dest='pdf_file', help='A pdf file to write output to (details are skipped in pdf files)')
       parser.add_argument('--project-title', default=None, dest='project_title', help='A project title to use in reports')
+      parser.add_argument('--driver-file', default=None, dest='driver_file', help='A file that contains driver information like binary filenames, etc.')
       
       actual_args = list()
       for arg_pos in range(1, len(sys.argv)):
@@ -158,6 +173,8 @@ class Settings(object):
       self.new_info_file = args.new_info_file
       
       self.build_info = args.build_info
+      
+      self.driver_file = args.driver_file
       
       self.symbolsHTMLHeader = "H4"
       
@@ -536,17 +553,10 @@ class Binary(object):
    def __ne__(self, other):
       """Overrides the default implementation (unnecessary in Python 3)"""
       return not self.__eq__(other)
-            
-class Driver(object):
    
-   def __init__(self):
-  
-      self.settings = Settings()
-      
-      self.old_binary = Binary(self.settings, self.settings.old_binary_filename)
-      self.new_binary = Binary(self.settings, self.settings.new_binary_filename)
-      
-      self.prepareMeasures()
+class Report(object):
+   
+   def generate():
       
       file_output_requested = False
             
@@ -580,6 +590,50 @@ class Driver(object):
          self.settings.out = sys.stdout
             
          self.writeTextFile()
+         
+   def configureHTMLTemplate(self, html_filename, keywords):
+      
+      import jinja2
+      from jinja2 import Environment, FileSystemLoader, StrictUndefined
+      
+      env = Environment(loader=FileSystemLoader(repo_path), \
+                                       undefined = StrictUndefined)
+           
+      #addGlobalJinjaFunction(GetComponentLink)
+        
+      try:
+         creator = env.get_template("single_report_template.html")
+         
+      except jinja2.exceptions.TemplateError as e:
+         print "Error creating jinja creator\n" + str(e)
+         sys.exit(1)
+         
+      try:
+         replacedContent = creator.render(keywords)
+      except (jinja2.exceptions.TemplateError) as e:
+         print "Error rendering jinja file \'" + \
+            html_filename + "\'\n" + str(e)
+         sys.exit(1)
+      
+      htmlFile = open(html_filename, 'w')
+      
+      htmlFile.write(replacedContent.encode('utf8'))
+      
+      htmlFile.close()
+         
+class BinaryPair(object):
+            
+   def __init__(self, settings, old_binary_filename, new_binary_filename):
+      
+      self.settings = settings
+      
+      self.old_binary_filename = old_binary_filename
+      self.new_binary_filename = new_binary_filename
+      
+      self.old_binary = Binary(self.settings, self.old_binary_filename)
+      self.new_binary = Binary(self.settings, self.new_binary_filename)
+      
+      self.prepareMeasures()
          
    def prepareMeasures(self):
       
@@ -666,21 +720,26 @@ class Driver(object):
          
          if not old_symbol.__eq__(new_symbol):
             self.num_assemblies_differ += 1
+      
+class PairReport(Report):
    
-   def getMemChangeHTML(self, old_size, new_size):
-      difference = new_size - old_size
-      return highlightNumberHTML(new_size - old_size)
+   def __init__(self, settings, old_binary_filename, new_binary_filename):
+      
+      self.binary_pair = BinaryPair(settings, old_binary_filename, new_binary_filename)
    
    def generatePersistingSymbolsTableHTML(self):
+      
+      old_binary = self.binary_pair.old_binary
+      new_binary = self.binary_pair.new_binary
       
       table_html = ""
       
       import operator
       
       diff_by_symbol = {}
-      for symbol_name in self.common_symbol_names:
-         old_symbol = self.old_binary.symbols[symbol_name]
-         new_symbol = self.new_binary.symbols[symbol_name]
+      for symbol_name in self.binary_pair.common_symbol_names:
+         old_symbol = old_binary.symbols[symbol_name]
+         new_symbol = new_binary.symbols[symbol_name]
          
          difference = new_symbol.size - old_symbol.size
          
@@ -694,8 +753,8 @@ class Driver(object):
          
          symbol_name = symbol_tuple[0]
          
-         old_symbol = self.old_binary.symbols[symbol_name]
-         new_symbol = self.new_binary.symbols[symbol_name]
+         old_symbol = old_binary.symbols[symbol_name]
+         new_symbol = new_binary.symbols[symbol_name]
          
          if new_symbol.livesInProgramMemory():
             size_delta += new_symbol.size - old_symbol.size
@@ -707,20 +766,22 @@ class Driver(object):
                               new_symbol.type, \
                               formatNumberHTML(old_symbol.size), \
                               formatNumberHTML(new_symbol.size), \
-                              self.getMemChangeHTML(old_symbol.size, new_symbol.size))
+                              memDeltaHTML(old_symbol.size, new_symbol.size))
             
       return [table_html, highlightNumberHTML(size_delta)]
       
    def generateDisappearedSymbolsTableHTML(self):
       
+      old_binary = self.binary_pair.old_binary
+      
       table_html = ""
       overal_symbol_size = 0
       
-      for symbol_name in sorted(self.symbols_only_in_old, \
-                                key=lambda symbol_name: self.old_binary.symbols[symbol_name].size, \
+      for symbol_name in sorted(self.binary_pair.symbols_only_in_old, \
+                                key=lambda symbol_name: old_binary.symbols[symbol_name].size, \
                                 reverse = True):
          symbol_name_html = fixStringForHTML(symbol_name)
-         symbol = self.old_binary.symbols[symbol_name]
+         symbol = old_binary.symbols[symbol_name]
          table_html += "<tr><td>%s</td><td>%s</td><td>%s</td></tr>\n" % ( \
                               generateSymbolTableEntry(symbol_name_html), \
                               symbol.type, \
@@ -733,14 +794,16 @@ class Driver(object):
    
    def generateNewSymbolsTableHTML(self):
       
+      new_binary = self.binary_pair.new_binary
+      
       table_html = ""
       overal_symbol_size = 0
       
-      for symbol_name in sorted(self.symbols_only_in_new, \
-                                key=lambda symbol_name: self.new_binary.symbols[symbol_name].size, \
+      for symbol_name in sorted(self.binary_pair.symbols_only_in_new, \
+                                key=lambda symbol_name: new_binary.symbols[symbol_name].size, \
                                 reverse = True):
          symbol_name_html = fixStringForHTML(symbol_name)
-         symbol = self.new_binary.symbols[symbol_name]
+         symbol = new_binary.symbols[symbol_name]
          table_html += "<tr><td>%s</td><td>%s</td><td>%s</td></tr>\n" % ( \
                               generateSymbolTableEntry(symbol_name_html), \
                               symbol.type, \
@@ -756,7 +819,7 @@ class Driver(object):
       table_html = ""
       
       index = 0
-      for symbol_pair in self.similar_symbols:
+      for symbol_pair in self.binary_pair.similar_symbols:
          
          index = index + 1
          
@@ -774,35 +837,28 @@ class Driver(object):
                               new_symbol.type, \
                               formatNumberHTML(old_symbol.size), \
                               formatNumberHTML(new_symbol.size), \
-                              self.getMemChangeHTML(old_symbol.size, new_symbol.size))
+                              memDeltaHTML(old_symbol.size, new_symbol.size))
       
-      return [table_html, len(self.similar_symbols)]
-   
-   def getTendencySymbol(self, from_size, to_size):
-      if from_size > to_size:
-         return "*"
-      return ""
-         
-   def formatMemChange(self, what, from_size, to_size):
-      tendency_symbol = self.getTendencySymbol(from_size, to_size)
-      difference = to_size - from_size
-      return "%s: %d -> %d bytes (%+d bytes) %s" % (what, from_size, to_size, difference, tendency_symbol)
+      return [table_html, len(self.binary_pair.similar_symbols)]
    
    def generatePersistentSymbolDetailsString(self):
       
+      old_binary = self.binary_pair.old_binary
+      new_binary = self.binary_pair.new_binary
+      
       text = ""
       
-      for symbol_name in self.common_symbol_names:
+      for symbol_name in self.binary_pair.common_symbol_names:
          
-         old_symbol = self.old_binary.symbols[symbol_name]
-         new_symbol = self.new_binary.symbols[symbol_name]
+         old_symbol = old_binary.symbols[symbol_name]
+         new_symbol = new_binary.symbols[symbol_name]
          
          if not old_symbol.__eq__(new_symbol):
             symbol_differences = old_symbol.getDifferencesAsString(new_symbol, "   ")
             if old_symbol.size == new_symbol.size:
                size_info = "size unchanged"
             else:
-               size_info = self.formatMemChange("", old_symbol.size, new_symbol.size)
+               size_info = formatMemChange("", old_symbol.size, new_symbol.size)
             text += "******************************************************************\n"
             text += "%s (%s)\n" % (symbol_name, size_info)
             text += "******************************************************************\n"
@@ -812,12 +868,15 @@ class Driver(object):
    
    def generatePersistentSymbolDetailsHTML(self):
       
+      old_binary = self.binary_pair.old_binary
+      new_binary = self.binary_pair.new_binary
+      
       html = ""
       
-      for symbol_name in self.common_symbol_names:
+      for symbol_name in self.binary_pair.common_symbol_names:
          
-         old_symbol = self.old_binary.symbols[symbol_name]
-         new_symbol = self.new_binary.symbols[symbol_name]
+         old_symbol = old_binary.symbols[symbol_name]
+         new_symbol = new_binary.symbols[symbol_name]
          
          symbol_name_html = fixStringForHTML(symbol_name)
          
@@ -828,7 +887,7 @@ class Driver(object):
             if old_symbol.size == new_symbol.size:
                size_info = "size unchanged"
             else:
-               size_info = self.formatMemChange("", old_symbol.size, new_symbol.size)
+               size_info = formatMemChange("", old_symbol.size, new_symbol.size)
                
             html += "<%s>%s (%s)</%s>\n" % ( \
                                             self.settings.symbolsHTMLHeader, \
@@ -843,9 +902,9 @@ class Driver(object):
       
       text = ""
       
-      if len(self.symbols_only_in_old) > 0:
-         for symbol_name in self.symbols_only_in_old:
-            symbol = self.old_binary.symbols[symbol_name]
+      if len(self.binary_pair.symbols_only_in_old) > 0:
+         for symbol_name in self.binary_pair.symbols_only_in_old:
+            symbol = self.binary_pair.old_binary.symbols[symbol_name]
             text += "******************************************************************\n"
             text += "%s: %d bytes\n" % (symbol_name, symbol.size)
             text += "******************************************************************\n"
@@ -857,10 +916,10 @@ class Driver(object):
       
       html = ""
       
-      if len(self.symbols_only_in_old) > 0:
+      if len(self.binary_pair.symbols_only_in_old) > 0:
          html += "<pre>"
-         for symbol_name in self.symbols_only_in_old:
-            symbol = self.old_binary.symbols[symbol_name]
+         for symbol_name in self.binary_pair.symbols_only_in_old:
+            symbol = self.binary_pair.old_binary.symbols[symbol_name]
             symbol_name_html = fixStringForHTML(symbol_name)
             html += "<%s>%s: %d bytes</%s>\n" % ( \
                                                  self.settings.symbolsHTMLHeader, \
@@ -876,9 +935,9 @@ class Driver(object):
       
       text = ""
       
-      if len(self.symbols_only_in_new) > 0:
-         for symbol_name in self.symbols_only_in_new:
-            symbol = self.new_binary.symbols[symbol_name]
+      if len(self.binary_pair.symbols_only_in_new) > 0:
+         for symbol_name in self.binary_pair.symbols_only_in_new:
+            symbol = self.binary_pair.new_binary.symbols[symbol_name]
             text += "******************************************************************\n"
             text += "%s: %d bytes\n" % (symbol_name, symbol.size)
             text += "******************************************************************\n"
@@ -890,10 +949,10 @@ class Driver(object):
       
       html = ""
       
-      if len(self.symbols_only_in_new) > 0:
+      if len(self.binary_pair.symbols_only_in_new) > 0:
          html += "<pre>"
          for symbol_name in self.symbols_only_in_new:
-            symbol = self.new_binary.symbols[symbol_name]
+            symbol = self.binary_pair.new_binary.symbols[symbol_name]
             symbol_name_html = fixStringForHTML(symbol_name)
             html += "<%s>%s: %d bytes</%s>\n" % ( \
                                                  self.settings.symbolsHTMLHeader, \
@@ -909,7 +968,7 @@ class Driver(object):
       
       text = ""
       
-      for symbol_pair in self.similar_symbols:
+      for symbol_pair in self.binary_pair.similar_symbols:
          
          old_symbol = symbol_pair[0]
          new_symbol = symbol_pair[1]
@@ -929,7 +988,7 @@ class Driver(object):
       html = ""
       
       index = 0;
-      for symbol_pair in self.similar_symbols:
+      for symbol_pair in self.binary_pair.similar_symbols:
          
          index = index + 1
          
@@ -944,7 +1003,7 @@ class Driver(object):
          if old_symbol.size == new_symbol.size:
             size_info = "size unchanged"
          else:
-            size_info = self.formatMemChange("", old_symbol.size, new_symbol.size)
+            size_info = formatMemChange("", old_symbol.size, new_symbol.size)
             
          html += "<%s>Similar pair %s (%s)</%s>\n" % ( \
                                           self.settings.symbolsHTMLHeader, \
@@ -962,6 +1021,9 @@ class Driver(object):
       import os, inspect, datetime
       
       repo_path = os.path.dirname(os.path.realpath(inspect.getfile(inspect.currentframe())))
+      
+      old_binary = self.binary_pair.old_binary
+      new_binary = self.binary_pair.new_binary
       
       #print "repo_path = " + repo_path
       
@@ -995,28 +1057,28 @@ class Driver(object):
          ,"old_binary_file" : fixStringForHTML(self.settings.old_alias)
          ,"new_binary_file" : fixStringForHTML(self.settings.new_alias)
          
-         ,"code_size_old_overall" : str(self.old_binary.progmem_size)
-         ,"code_size_new_overall" : str(self.new_binary.progmem_size)
-         ,"code_size_change_overall" : self.getMemChangeHTML(self.old_binary.progmem_size, self.new_binary.progmem_size)
-         ,"static_ram_old_overall" : str(self.old_binary.static_ram_size)
-         ,"static_ram_new_overall" : str(self.new_binary.static_ram_size)
-         ,"static_ram_change_overall" : self.getMemChangeHTML(self.old_binary.static_ram_size, self.new_binary.static_ram_size)
-         ,"text_size_old_overall" : str(self.old_binary.text_size)
-         ,"text_size_new_overall" : str(self.new_binary.text_size)
-         ,"text_size_change_overall" : self.getMemChangeHTML(self.old_binary.text_size, self.new_binary.text_size)
-         ,"data_size_old_overall" : str(self.old_binary.data_size)
-         ,"data_size_new_overall" : str(self.new_binary.data_size)
-         ,"data_size_change_overall" : self.getMemChangeHTML(self.old_binary.data_size, self.new_binary.data_size)
-         ,"bss_size_old_overall" : str(self.old_binary.bss_size)
-         ,"bss_size_new_overall" : str(self.new_binary.bss_size)
-         ,"bss_size_change_overall" : self.getMemChangeHTML(self.old_binary.bss_size, self.new_binary.bss_size)
+         ,"code_size_old_overall" : str(old_binary.progmem_size)
+         ,"code_size_new_overall" : str(new_binary.progmem_size)
+         ,"code_size_change_overall" : memDeltaHTML(self.old_binary.progmem_size, self.new_binary.progmem_size)
+         ,"static_ram_old_overall" : str(old_binary.static_ram_size)
+         ,"static_ram_new_overall" : str(new_binary.static_ram_size)
+         ,"static_ram_change_overall" : memDeltaHTML(self.old_binary.static_ram_size, self.new_binary.static_ram_size)
+         ,"text_size_old_overall" : str(old_binary.text_size)
+         ,"text_size_new_overall" : str(new_binary.text_size)
+         ,"text_size_change_overall" : memDeltaHTML(old_binary.text_size, self.new_binary.text_size)
+         ,"data_size_old_overall" : str(old_binary.data_size)
+         ,"data_size_new_overall" : str(new_binary.data_size)
+         ,"data_size_change_overall" : memDeltaHTML(self.old_binary.data_size, self.new_binary.data_size)
+         ,"bss_size_old_overall" : str(old_binary.bss_size)
+         ,"bss_size_new_overall" : str(new_binary.bss_size)
+         ,"bss_size_change_overall" : memDeltaHTML(old_binary.bss_size, self.new_binary.bss_size)
          
-         ,"total_symbols_old" : str(len(self.old_binary.symbols.keys()))
-         ,"total_symbols_new" : str(len(self.new_binary.symbols.keys()))
+         ,"total_symbols_old" : str(len(old_binary.symbols.keys()))
+         ,"total_symbols_new" : str(len(new_binary.symbols.keys()))
                   
-         ,"num_persisting_symbols" : str(len(self.common_symbol_names))
-         ,"num_disappeared_symbols" : str(self.num_symbols_disappeared)
-         ,"num_new_symbols" : str(self.num_symbols_new)
+         ,"num_persisting_symbols" : str(len(self.binary_pair.common_symbol_names))
+         ,"num_disappeared_symbols" : str(self.binary_pair.num_symbols_disappeared)
+         ,"num_new_symbols" : str(self.binary_pair.num_symbols_new)
          ,"num_similar_symbols" : str(num_similar_symbols)
          
          ,"persisting_symbols_table" : persisting_symbols_table
@@ -1041,33 +1103,7 @@ class Driver(object):
          ,"date" : datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       }
       
-      import jinja2
-      from jinja2 import Environment, FileSystemLoader, StrictUndefined
-      
-      env = Environment(loader=FileSystemLoader(repo_path), \
-                                       undefined = StrictUndefined)
-           
-      #addGlobalJinjaFunction(GetComponentLink)
-        
-      try:
-         creator = env.get_template("template.html")
-         
-      except jinja2.exceptions.TemplateError as e:
-         print "Error creating jinja creator\n" + str(e)
-         sys.exit(1)
-         
-      try:
-         replacedContent = creator.render(keywords)
-      except (jinja2.exceptions.TemplateError) as e:
-         print "Error rendering jinja file \'" + \
-            html_filename + "\'\n" + str(e)
-         sys.exit(1)
-      
-      htmlFile = open(html_filename, 'w')
-      
-      htmlFile.write(replacedContent.encode('utf8'))
-      
-      htmlFile.close()
+      self.configureHTMLTemplate(html_filename, keywords)
   
    def writeTextFile(self):
       
@@ -1077,6 +1113,9 @@ class Driver(object):
          title = self.settings.project_title
       else:
          title = "ELF Binary Comparison"
+            
+      old_binary = self.binary_pair.old_binary
+      new_binary = self.binary_pair.new_binary
       
       out.write("%s\n" % (title))
       out.write("   (c) 2019 by noseglasses (shinynoseglasses@gmail.com)\n")
@@ -1092,27 +1131,27 @@ class Driver(object):
          out.write(self.settings.build_info + "\n")
          out.write("\n")
          
-      if self.old_binary == self.new_binary:
+      if old_binary == new_binary:
          out.write("   No symbol differences\n")
          return
       
       out.write("Binary size:\n")
-      if self.old_binary.progmem_size == self.new_binary.progmem_size:
+      if old_binary.progmem_size == new_binary.progmem_size:
          out.write("   no changes\n")
       else:
-         out.write("   " + self.formatMemChange("overall", self.old_binary.progmem_size, self.new_binary.progmem_size) + "\n")
-         out.write("   " + self.formatMemChange("text", self.old_binary.text_size, self.new_binary.text_size) + "\n")
-         out.write("   " + self.formatMemChange("data", self.old_binary.data_size, self.new_binary.data_size) + "\n")
+         out.write("   " + formatMemChange("overall", old_binary.progmem_size, new_binary.progmem_size) + "\n")
+         out.write("   " + formatMemChange("text", old_binary.text_size, new_binary.text_size) + "\n")
+         out.write("   " + formatMemChange("data", old_binary.data_size, new_binary.data_size) + "\n")
          
       out.write("\n")
       
       out.write("Static RAM consumption:\n")
-      if self.old_binary.static_ram_size == self.new_binary.static_ram_size:
+      if old_binary.static_ram_size == new_binary.static_ram_size:
          out.write("   no changes\n")
       else:
-         out.write("   " + self.formatMemChange("overall", self.old_binary.static_ram_size, self.new_binary.static_ram_size) + "\n")
-         out.write("   " + self.formatMemChange("data", self.old_binary.data_size, self.new_binary.data_size) + "\n")
-         out.write("   " + self.formatMemChange("bss", self.old_binary.bss_size, self.new_binary.bss_size) + "\n")
+         out.write("   " + formatMemChange("overall", old_binary.static_ram_size, new_binary.static_ram_size) + "\n")
+         out.write("   " + formatMemChange("data", old_binary.data_size, new_binary.data_size) + "\n")
+         out.write("   " + formatMemChange("bss", old_binary.bss_size, new_binary.bss_size) + "\n")
            
       out.write("\n") 
       out.write("text: code instructions\n")
@@ -1121,51 +1160,51 @@ class Driver(object):
          
       out.write("\n")
       
-      out.write("%d symbols found in %s\n" % (len(self.old_binary.symbols.keys()), self.settings.old_alias))
-      out.write("%d symbols found in %s\n" % (len(self.new_binary.symbols.keys()), self.settings.new_alias))
+      out.write("%d symbols found in %s\n" % (len(old_binary.symbols.keys()), self.settings.old_alias))
+      out.write("%d symbols found in %s\n" % (len(new_binary.symbols.keys()), self.settings.new_alias))
       
       out.write("\n")
       
-      out.write("%d symbols persisted\n" % (len(self.common_symbol_names)))
+      out.write("%d symbols persisted\n" % (len(self.binary_pair.common_symbol_names)))
       
       out.write("\n")
       
-      if self.num_symbol_size_changes != 0:
-         out.write("%d symbols changed size:\n" % (self.num_symbol_size_changes))
+      if self.binary_pair.num_symbol_size_changes != 0:
+         out.write("%d symbols changed size:\n" % (self.binary_pair.num_symbol_size_changes))
          
-         for symbol_name in self.common_symbol_names:
-            old_symbol = self.old_binary.symbols[symbol_name]
-            new_symbol = self.new_binary.symbols[symbol_name]
+         for symbol_name in self.binary_pair.common_symbol_names:
+            old_symbol = old_binary.symbols[symbol_name]
+            new_symbol = new_binary.symbols[symbol_name]
             if old_symbol.size != new_symbol.size:
-               out.write("   " + self.formatMemChange(symbol_name, old_symbol.size, new_symbol.size) + "\n")
+               out.write("   " + formatMemChange(symbol_name, old_symbol.size, new_symbol.size) + "\n")
          
       out.write("\n")
       
-      if len(self.symbols_only_in_old) > 0:
+      if len(self.binary_pair.symbols_only_in_old) > 0:
          
-         out.write("%d symbols dissappeared (%d bytes, see details below):" % (self.num_symbols_disappeared, self.num_bytes_disappeared) + "\n")
+         out.write("%d symbols dissappeared (%d bytes, see details below):" % (self.binary_pair.num_symbols_disappeared, self.binary_pair.num_bytes_disappeared) + "\n")
          
-         for symbol_name in self.symbols_only_in_old:
-            symbol = self.old_binary.symbols[symbol_name]
+         for symbol_name in self.binary_pair.symbols_only_in_old:
+            symbol = old_binary.symbols[symbol_name]
             out.write("   %s: %d bytes" % (symbol_name, symbol.size) + "\n")
                
       out.write("\n")
       
-      if len(self.symbols_only_in_new) > 0:
+      if len(self.binary_pair.symbols_only_in_new) > 0:
 
-         out.write("%d new symbols (%d bytes, see details below):" % (self.num_symbols_new, self.num_bytes_new) + "\n")
+         out.write("%d new symbols (%d bytes, see details below):" % (self.binary_pair.num_symbols_new, self.binary_pair.num_bytes_new) + "\n")
          
-         for symbol_name in self.symbols_only_in_new:
-            symbol = self.new_binary.symbols[symbol_name]
+         for symbol_name in self.binary_pair.symbols_only_in_new:
+            symbol = new_binary.symbols[symbol_name]
             out.write("   %s: %d bytes" % (symbol_name, symbol.size) + "\n")
                
       out.write("\n")
       
-      if len(self.similar_symbols) > 0:
+      if len(self.binary_pair.similar_symbols) > 0:
 
-         out.write("%d similar symbol pairs:\n" % (len(self.similar_symbols)))
+         out.write("%d similar symbol pairs:\n" % (len(self.binary_pair.similar_symbols)))
          
-         for symbol_pair in self.similar_symbols:
+         for symbol_pair in self.binary_pair.similar_symbols:
             old_symbol = symbol_pair[0]
             new_symbol = symbol_pair[1]
             out.write("   %s: %d bytes" % (old_symbol.name, old_symbol.size) + "\n")
@@ -1188,7 +1227,7 @@ class Driver(object):
       
       out.write("\n")
       
-      out.write("The following %d symbols' assembly differs\n" % (self.num_assemblies_differ) + "\n")
+      out.write("The following %d symbols' assembly differs\n" % (self.binary_pair.num_assemblies_differ) + "\n")
       out.write(self.generatePersistentSymbolDetailsString())
       
       out.write("Disappeared symbols\n")
@@ -1197,6 +1236,129 @@ class Driver(object):
       out.write(self.generateNewSymbolDetailsString())
       out.write("Similar symbols\n")
       out.write(self.generateSimilarSymbolDetailsString())
+      
+class MultiReport(Report):
+   
+   def __init__(self, settings, yaml_file):
+      
+      self.settings = settings
+      
+      self.yaml_file = yaml_file
+      
+      self.parseYaml()
+      
+   def parseYaml(self):
+      
+      import yaml
+      
+      my_yaml = None
+      with open(self.yaml_file, 'r') as stream:
+         try:
+            my_yaml = yaml.load(stream)
+         except yaml.YAMLError as exc:
+            print(exc)
+            return
+         
+      # my_yaml is supposed to be list of binary pairs
+      
+      self.binary_pairs = []
+      
+      for data_set in my_yaml:
+         
+         old_binary_filename = data_set.get("old_binary")
+         new_binary_filename = data_set.get("new_binary")
+         
+         bp = PairReport(self.settings, \
+                         old_binary_filename, \
+                         new_binary_filename)
+         
+         bp.title = data_set.get("title")
+            
+         self.binary_pairs.append(bp)
+         
+   def generateResourceConsumptionTableHTML(self):
+      
+      table_lines_html = ""
+      
+      for binary_pair in self.binary_pairs:
+         
+         code_size_old_overall = binary_pair.old_binary.progmem_size
+         code_size_new_overall = binary_pair.new_binary.progmem_size
+         code_size_delta_overall = memDeltaHTML(binary_pair.old_binary.progmem_size, \
+                                                binary_pair.new_binary.progmem_size)
+         
+         static_ram_old_overall = binary_pair.old_binary.static_ram_size
+         static_ram_new_overall = binary_pair.new_binary.static_ram_size
+         static_ram_change_overall = memDeltaHTML(binary_pair.old_binary.static_ram_size, \
+                                                  binary_pair.new_binary.static_ram_size)
+         
+         table_lines_html += "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n" % ( \
+            title, \
+            code_size_old_overall, \
+            code_size_new_overall, \
+            code_size_delta_overall, \
+            static_ram_old_overall, \
+            static_ram_new_overall, \
+            static_ram_change_overall \
+         )
+
+      return table_lines_html
+   
+   def generateSymbolsTableHTML(self):
+      
+      table_lines_html = ""
+      
+      for binary_pair in self.binary_pairs:
+      
+         num_persisting_symbols =  str(len(binary_pair.common_symbol_names))
+         num_disappeared_symbols = str(binary_pair.num_symbols_disappeared)
+         num_new_symbols = str(binary_pair.num_symbols_new)
+         
+         table_lines_html += "<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n" % ( \
+            title, \
+            num_persisting_symbols, \
+            num_disappeared_symbols, \
+            num_new_symbols
+         )
+      
+      return table_lines_html
+   
+   def writeHTMLFile(self, html_file, skip_details):
+      
+      resource_consumtption_table = self.generateResourceConsumptionTableHTML()
+      symbols_table = self.generateSymbolsTableHTML()
+      
+      keywords = { \
+          "page_title" : u"ELF Binary Comparison - (c) 2019 by noseglasses" \
+         ,"resource_consumtption_table" : resource_consumtption_table \
+         ,"symbols_table" : symbols_table \
+      }
+      
+      self.configureHTMLTemplate(html_file, keywords)
+      
+   def writeTextFile(self):
+      
+      # TODO
+
+class Driver(object):
+   
+   def __init__(self):
+  
+      self.settings = Settings()
+      
+      if settings.driver_file:
+         
+         bpg = MultiReport(self.settings, settings.driver_file)
+         
+         pb.generate()
+         
+      else:
+         
+         bp = PairReport(self.settings, \
+                         self.settings.old_binary_filename, \
+                         self.settings.new_binary_filename):
+        
+         bp.generate()
   
 if __name__ == "__main__":
    driver = Driver()

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset=utf-8>
+
+<meta name="robots" content="noindex">
+<title>{{page_title}}</title>
+  <script src="{{elf_diff_repo_base}}/sorttable.js"></script>
+  <style>
+    /* Appearance */
+    body, table { font-family: sans-serif; }
+    table { border-collapse: collapse; }
+    td, th { padding: 6px; }
+    th { background: #333; color: white; }
+    /*tbody tr:nth-child(odd) { background: #dfdfdf; }*/
+    /*table { border: 1px solid red; }*/
+    
+    /* Scrollability of table */
+    /*table { width: 500px; }*/ /* fixed width table */
+    table.sortable  
+       th:not(.sorttable_sorted):not(.sorttable_sorted_reverse):not(.sorttable_nosort):after { 
+       content: " \25B4\25BE" 
+    }
+    thead { display: table-header-group; } /* makes it sizeable */
+    tbody { 
+      display: table-header-group; /* makes it sizeable */
+      /*height: 170px;*/ /* height of scrollable area */
+      /*overflow: auto;*/ /* scroll rather than overflow */
+      /*width: 100%;*/ /* fill the box */
+    }
+    /*thead th { width: 250px; }*/ /* fixed width for THs */
+    /*tbody td { width: 242px; }*/ /* fixed width for TDs */
+    /* the tbody needs to be 16px less than the thead, for the scrollbar */
+    
+    .fixed_table thead { 
+       display: table-header-group; 
+       width: 500px;
+    }
+    .fixed_table tbody { 
+       display: table-header-group; 
+       width: 500px;
+    }
+    
+    .deterioration { background: #FFAAAA; }
+    .improvement { background: #AAFFAA; } 
+    .unchanged { }
+    .diff_chg { background: #FFAAAA; } 
+    
+    table.size_overview th:nth-child(1) { text-align: left; }
+    table.size_overview th:nth-child(2) { text-align: right; }
+    table.size_overview th:nth-child(3) { text-align: right; }
+    table.size_overview th:nth-child(4) { text-align: right; }
+    table.size_overview th:nth-child(5) { text-align: right; }
+    table.size_overview th:nth-child(6) { text-align: right; }
+    table.size_overview th:nth-child(7) { text-align: right; }
+    
+    table.size_overview td:nth-child(1) { text-align: left; }
+    table.size_overview td:nth-child(2) { text-align: right; font-family: monospace;}
+    table.size_overview td:nth-child(3) { text-align: right; font-family: monospace;}
+    table.size_overview td:nth-child(4) { text-align: right; font-family: monospace;}
+    table.size_overview td:nth-child(5) { text-align: right; font-family: monospace;}
+    table.size_overview td:nth-child(6) { text-align: right; font-family: monospace;}
+    table.size_overview td:nth-child(7) { text-align: right; font-family: monospace;}
+        
+    a:link {
+      text-decoration: none;
+      color: black;
+    }
+
+    a:visited {
+      text-decoration: none;
+      color: black;
+    }
+
+    a:hover {
+      text-decoration: underline;
+      color: blue;
+    }
+
+    a:active {
+      text-decoration: underline;
+      color: blue;
+    }
+    
+    .symbol_name {
+      font-family: monospace;
+    } 
+   .number {
+      font-family: monospace;
+    } 
+  </style>
+</head>
+
+<body>
+
+<H1>{{doc_title}}</H1>
+
+generated: {{date}}
+
+<H2>Resource Consumption</H2>
+<table class = "fixed_table size_overview">
+    <thead>
+    <tr>
+    <th>Binary</th><th>Progmam Memory/bytes</th><th></th><th></th><th>RAM/bytes</th><th></th><th></th>
+    </tr>
+    <tr>
+    <th></th><th>Old</th><th>New</th><th>Delta</th><th>Old</th><th>New</th><th>Delta</th>
+    </tr>
+    </thead>
+    <tbody>
+      {{resource_consumption_table}}
+    </tbody>
+</table>
+
+<H2>Symbols<H2>
+<table class = "fixed_table size_overview">
+    <thead>
+    <tr>
+    <th>Binary</th><th>Persisting</th><th>Disappeared</th><th>New</th>
+    </tr>
+    </thead>
+    <tbody>
+      {{symbols_table}}
+    </tbody>
+</table>
+
+<footer>
+<p>Genererated by elf_diff (https://github.com/CapeLeidokos/elf_diff) © 2019 by noseglasses (shinynoseglasses@gmail.com)</p>
+<p>Sortable tables from <a href="https://kryogenix.org">kryogenix.org</a></p>
+</footer>
+
+</body>
+</html>
