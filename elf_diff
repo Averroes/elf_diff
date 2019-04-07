@@ -118,43 +118,54 @@ class Settings(object):
            
       args = parser.parse_args(actual_args)
       
-      if len(args.binaries) == 0:
-         if not args.old_binary_filename:
-            print "No old binary filename defined"
-            exit(1)
-         else:
-            self.old_binary_filename = args.old_binary_filename
-            
-         if not args.new_binary_filename:
-            print "No new binary filename defined"
-            exit(1)
-         else:
-            self.new_binary_filename = args.new_binary_filename
-      elif len(args.binaries) == 2:
-         if args.old_binary_filename:
-            print "Old binary filename redundantly defined"
-            exit(1)
-         else:
-            self.old_binary_filename = args.binaries[0]
-            
-         if args.new_binary_filename:
-            print "Old binary filename redundantly defined"
-            exit(1)
-         else:
-            self.new_binary_filename = args.binaries[1]
-      else:
-         print "Please specify either none or two binaries"
-         exit(1)
+      self.driver_file = args.driver_file
       
-      if args.old_alias:
-         self.old_alias = args.old_alias
-      else:
-         self.old_alias = self.old_binary_filename
+      if not self.driver_file:
+         if len(args.binaries) == 0:
+            if not args.old_binary_filename:
+               print "No old binary filename defined"
+               exit(1)
+            else:
+               self.old_binary_filename = args.old_binary_filename
+               
+            if not args.new_binary_filename:
+               print "No new binary filename defined"
+               exit(1)
+            else:
+               self.new_binary_filename = args.new_binary_filename
+         elif len(args.binaries) == 2:
+            if args.old_binary_filename:
+               print "Old binary filename redundantly defined"
+               exit(1)
+            else:
+               self.old_binary_filename = args.binaries[0]
+               
+            if args.new_binary_filename:
+               print "Old binary filename redundantly defined"
+               exit(1)
+            else:
+               self.new_binary_filename = args.binaries[1]
+         else:
+            print "Please specify either none or two binaries"
+            exit(1)
+            
+         if not os.path.isfile(self.old_binary_filename):
+            print "Old binary \'%s\' is not a file or cannot be found" % (self.old_binary_filename)
+            sys.exit(1)
+            
+         if not os.path.isfile(self.new_binary_filename):
+            print "New binary \'%s\' is not a file or cannot be found" % (self.new_binary_filename)
+            sys.exit(1)
       
-      if args.new_alias:
-         self.new_alias = args.new_alias
-      else:
-         self.new_alias = self.new_binary_filename
+         if args.old_alias:
+            self.old_alias = args.old_alias
+         else:
+            self.old_alias = self.old_binary_filename
+         
+         if args.new_alias:
+            self.new_alias = args.new_alias
+         else:
+            self.new_alias = self.new_binary_filename
          
       self.bin_dir = args.bin_dir
       self.bin_prefix = args.bin_prefix
@@ -174,8 +185,6 @@ class Settings(object):
       
       self.build_info = args.build_info
       
-      self.driver_file = args.driver_file
-      
       self.symbolsHTMLHeader = "H4"
       
       self.validate()
@@ -184,15 +193,7 @@ class Settings(object):
 
       import os.path
       import sys
-      
-      if not os.path.isfile(self.old_binary_filename):
-         print "Old binary \'%s\' is not a file or cannot be found" % (self.old_binary_filename)
-         sys.exit(1)
-         
-      if not os.path.isfile(self.new_binary_filename):
-         print "New binary \'%s\' is not a file or cannot be found" % (self.new_binary_filename)
-         sys.exit(1)
-         
+
       if (not os.path.isfile(self.objdump_command)) or (not os.access(self.objdump_command, os.X_OK)):
          print "objdump command \'%s\' is either not a file or not executable" % (self.objdump_command)
          sys.exit(1)
@@ -556,7 +557,7 @@ class Binary(object):
    
 class Report(object):
    
-   def generate():
+   def generate(self):
       
       file_output_requested = False
             
@@ -591,10 +592,12 @@ class Report(object):
             
          self.writeTextFile()
          
-   def configureHTMLTemplate(self, html_filename, keywords):
+   def configureHTMLTemplate(self, template_filename, html_filename, keywords):
       
-      import jinja2
+      import jinja2, os, inspect
       from jinja2 import Environment, FileSystemLoader, StrictUndefined
+      
+      repo_path = os.path.dirname(os.path.realpath(inspect.getfile(inspect.currentframe())))
       
       env = Environment(loader=FileSystemLoader(repo_path), \
                                        undefined = StrictUndefined)
@@ -602,7 +605,7 @@ class Report(object):
       #addGlobalJinjaFunction(GetComponentLink)
         
       try:
-         creator = env.get_template("single_report_template.html")
+         creator = env.get_template(template_filename)
          
       except jinja2.exceptions.TemplateError as e:
          print "Error creating jinja creator\n" + str(e)
@@ -1103,7 +1106,7 @@ class PairReport(Report):
          ,"date" : datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       }
       
-      self.configureHTMLTemplate(html_filename, keywords)
+      self.configureHTMLTemplate("pair_report_template.html", html_filename, keywords)
   
    def writeTextFile(self):
       
@@ -1261,9 +1264,9 @@ class MultiReport(Report):
          
       # my_yaml is supposed to be list of binary pairs
       
-      self.binary_pairs = []
+      self.pair_reports = []
       
-      for data_set in my_yaml:
+      for data_set in my_yaml["binary-pairs"]:
          
          old_binary_filename = data_set.get("old_binary")
          new_binary_filename = data_set.get("new_binary")
@@ -1274,13 +1277,17 @@ class MultiReport(Report):
          
          bp.title = data_set.get("title")
             
-         self.binary_pairs.append(bp)
+         self.pair_reports.append(bp)
          
    def generateResourceConsumptionTableHTML(self):
       
       table_lines_html = ""
       
-      for binary_pair in self.binary_pairs:
+      for pair_report in self.pair_reports:
+         
+         title = pair_report.title
+         
+         binary_pair = pair_report.binary_pair
          
          code_size_old_overall = binary_pair.old_binary.progmem_size
          code_size_new_overall = binary_pair.new_binary.progmem_size
@@ -1308,7 +1315,11 @@ class MultiReport(Report):
       
       table_lines_html = ""
       
-      for binary_pair in self.binary_pairs:
+      for pair_report in self.pair_reports:
+         
+         title = pair_report.title
+         
+         binary_pair = pair_report.binary_pair
       
          num_persisting_symbols =  str(len(binary_pair.common_symbol_names))
          num_disappeared_symbols = str(binary_pair.num_symbols_disappeared)
@@ -1325,20 +1336,33 @@ class MultiReport(Report):
    
    def writeHTMLFile(self, html_file, skip_details):
       
+      import os, inspect, datetime
+      
+      repo_path = os.path.dirname(os.path.realpath(inspect.getfile(inspect.currentframe())))
+      
       resource_consumtption_table = self.generateResourceConsumptionTableHTML()
       symbols_table = self.generateSymbolsTableHTML()
-      
+         
+      if self.settings.project_title:
+         doc_title = fixStringForHTML(self.settings.project_title)
+      else:
+         doc_title = "ELF Binary Comparison - Multi Report"
+         
       keywords = { \
-          "page_title" : u"ELF Binary Comparison - (c) 2019 by noseglasses" \
-         ,"resource_consumtption_table" : resource_consumtption_table \
+          "elf_diff_repo_base" : repo_path
+         ,"doc_title" : doc_title
+         ,"page_title" : u"ELF Binary Comparison - (c) 2019 by noseglasses" \
+         ,"resource_consumption_table" : resource_consumtption_table \
          ,"symbols_table" : symbols_table \
+         ,"date" : datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       }
       
-      self.configureHTMLTemplate(html_file, keywords)
+      self.configureHTMLTemplate("multi_report_template.html", html_file, keywords)
       
    def writeTextFile(self):
       
       # TODO
+      pass
 
 class Driver(object):
    
@@ -1346,19 +1370,19 @@ class Driver(object):
   
       self.settings = Settings()
       
-      if settings.driver_file:
+      if self.settings.driver_file:
          
-         bpg = MultiReport(self.settings, settings.driver_file)
+         mr = MultiReport(self.settings, self.settings.driver_file)
          
-         pb.generate()
+         mr.generate()
          
       else:
          
-         bp = PairReport(self.settings, \
+         pr = PairReport(self.settings, \
                          self.settings.old_binary_filename, \
-                         self.settings.new_binary_filename):
+                         self.settings.new_binary_filename)
         
-         bp.generate()
+         pr.generate()
   
 if __name__ == "__main__":
    driver = Driver()
